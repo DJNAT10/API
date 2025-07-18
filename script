@@ -1,95 +1,88 @@
-# ------------------------
-# Step 1: Get access token
-# ------------------------
+# -------------------------
+# === 1) Set credentials ===
+# -------------------------
+# REPLACE with your own keys:
+$clientId = "YOUR_CLIENT_ID"
+$clientSecret = "YOUR_CLIENT_SECRET"
 
-$body = @{
+# -------------------------
+# === 2) Get access token ===
+# -------------------------
+
+$tokenBody = @{
     grant_type    = 'client_credentials'
-    clientId      = "1Bp8mYn5ksihGk7GSJlDkiNCdcsVMmFL"
-    clientSecret  = "MkIzui6lB-00oZ7YXKe-egLIH2xaERSnXP0IvqafjYWvxJHWXJwFdrsk0QB_LER4"
+    client_id     = $clientId
+    client_secret = $clientSecret
 }
 
-$response = Invoke-WebRequest -Uri "https://api.ctpx.secureworks.com/auth/api/v2/auth/token" `
-    -Method POST -Body $body
+$tokenResponse = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/auth/api/v2/auth/token" `
+    -Method POST `
+    -Body $tokenBody `
+    -ContentType "application/x-www-form-urlencoded"
 
-$token = ($response.Content | ConvertFrom-Json).access_token
+$token = $tokenResponse.access_token
+Write-Host "Access Token: $token"
 
-$header = @{
-    "Authorization" = "Bearer $token"
-    "Content-Type"  = "application/json"
-}
+# -------------------------
+# === 3) Build GraphQL ===
+# -------------------------
 
-# ------------------------
-# Step 2: Prepare GraphQL query for only medium alerts
-# ------------------------
-
-# Pagination cursor - start from null
-[String]$cursor = 'null'
-$cursorVal = { if ($cursor -eq "null") {$cursor} else {"""$cursor"""} }
-
-# Create an arraylist to hold results
-[Collections.ArrayList]$alertsReport = @()
-
-# ------------------------
-# Step 3: Loop through pages
-# ------------------------
-
-do {
-    Write-Output "Fetching alerts page..."
-
-    # Build GraphQL query string
-    $query = @"
+# This query requests Medium severity alerts:
+$graphqlQuery = @"
 query {
-  alerts(
-    first: 100
-    after: $(& $cursorVal)
-    filter: { severity: ["Medium"] }
-  ) {
-    pageInfo {
-      endCursor
-      hasNextPage
-    }
+  alertsV2(first: 50, filter: { severity: [Medium] }) {
     edges {
       node {
         id
-        severity
         title
-        description
+        severity
         createdAt
-        source
+        updatedAt
         status
       }
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
     }
   }
 }
 "@
 
-    # Send request
-    $result = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/graphql" `
-        -Method POST -Headers $header -Body (@{ query = $query } | ConvertTo-Json)
+$body = @{
+    query = $graphqlQuery
+} | ConvertTo-Json
 
-    $alertsData = $result.data.alerts
-
-    # Update cursor
-    $cursor = $alertsData.pageInfo.endCursor
-
-    # Add alerts to report
-    foreach ($edge in $alertsData.edges) {
-        [void]$alertsReport.Add($edge.node)
-    }
-
+$headers = @{
+    "Authorization" = "Bearer $token"
+    "Content-Type"  = "application/json"
 }
-while ($alertsData.pageInfo.hasNextPage -eq $true)
 
-Write-Output "Complete. Total alerts fetched: $($alertsReport.Count)"
+# -------------------------
+# === 4) Make API call ===
+# -------------------------
 
-# ------------------------
-# Step 4: Export to CSV
-# ------------------------
+$response = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/graphql" `
+    -Method POST `
+    -Headers $headers `
+    -Body $body
 
-$timestamp = Get-Date -Format "yyyy-MM-dd HH-mm-ss"
+$alerts = $response.data.alertsV2.edges.node
+
+Write-Host "Retrieved $($alerts.Count) alerts."
+
+# -------------------------
+# === 5) Save to CSV ===
+# -------------------------
+
+# Convert the list of edges to a flat list:
+$flatAlerts = $response.data.alertsV2.edges | ForEach-Object { $_.node }
+
+# Pick a path for your CSV:
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $outputPath = "$env:USERPROFILE\Desktop\Taegis_MediumAlerts_$timestamp.csv"
 
-$alertsReport | Select-Object id, severity, title, description, createdAt, source, status |
-    Export-Csv -Path $outputPath -NoTypeInformation
+$flatAlerts | Export-Csv -Path $outputPath -NoTypeInformation
 
-Write-Output "CSV exported to: $outputPath"
+Write-Host "Saved to: $outputPath"
+
