@@ -33,11 +33,18 @@ try {
 # Note: adjust fields (id, title, severity, createdAt, etc.) to match your schema
 $graphqlQuery = @"
 query {
-  events(input: { limit: 100 }) {
+  events(input: {
+    rns: ["tenant:$tenantId"],
+    filters: {
+      severity: [MEDIUM],
+      eventType: [ALERT]
+    }
+  }) {
     id
-    title
+    eventType
     severity
-    createdAt
+    summary
+    eventTime
   }
 }
 "@
