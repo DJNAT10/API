@@ -1,88 +1,88 @@
-# -------------------------
-# === 1) Set credentials ===
-# -------------------------
-# REPLACE with your own keys:
+# ---------------------------
+# 1) Configuration
+# ---------------------------
 $clientId = "YOUR_CLIENT_ID"
 $clientSecret = "YOUR_CLIENT_SECRET"
 
-# -------------------------
-# === 2) Get access token ===
-# -------------------------
-
+# ---------------------------
+# 2) Get access token
+# ---------------------------
 $tokenBody = @{
     grant_type    = 'client_credentials'
     client_id     = $clientId
     client_secret = $clientSecret
 }
 
-$tokenResponse = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/auth/api/v2/auth/token" `
-    -Method POST `
-    -Body $tokenBody `
-    -ContentType "application/x-www-form-urlencoded"
+try {
+    $tokenResponse = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/auth/api/v2/auth/token" `
+        -Method POST `
+        -Body $tokenBody `
+        -ContentType "application/x-www-form-urlencoded"
 
-$token = $tokenResponse.access_token
-Write-Host "Access Token: $token"
+    $token = $tokenResponse.access_token
+    Write-Host "✅ Successfully retrieved access token."
+} catch {
+    Write-Host "❌ Failed to get access token: $_"
+    exit
+}
 
-# -------------------------
-# === 3) Build GraphQL ===
-# -------------------------
-
-# This query requests Medium severity alerts:
+# ---------------------------
+# 3) Build GraphQL query
+# ---------------------------
+# Basic query: get first 100 events
+# Note: adjust fields (id, title, severity, createdAt, etc.) to match your schema
 $graphqlQuery = @"
 query {
-  alertsV2(first: 50, filter: { severity: [Medium] }) {
-    edges {
-      node {
-        id
-        title
-        severity
-        createdAt
-        updatedAt
-        status
-      }
-    }
-    pageInfo {
-      endCursor
-      hasNextPage
-    }
+  events(input: { limit: 100 }) {
+    id
+    title
+    severity
+    createdAt
   }
 }
 "@
 
-$body = @{
-    query = $graphqlQuery
-} | ConvertTo-Json
+$body = @{ query = $graphqlQuery } | ConvertTo-Json
 
 $headers = @{
     "Authorization" = "Bearer $token"
     "Content-Type"  = "application/json"
 }
 
-# -------------------------
-# === 4) Make API call ===
-# -------------------------
+# ---------------------------
+# 4) Make the API call
+# ---------------------------
+try {
+    $response = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/graphql" `
+        -Method POST `
+        -Headers $headers `
+        -Body $body
 
-$response = Invoke-RestMethod -Uri "https://api.ctpx.secureworks.com/graphql" `
-    -Method POST `
-    -Headers $headers `
-    -Body $body
+    Write-Host "✅ Successfully retrieved data from API."
+} catch {
+    Write-Host "❌ API call failed: $_"
+    exit
+}
 
-$alerts = $response.data.alertsV2.edges.node
+# ---------------------------
+# 5) Filter and prepare data
+# ---------------------------
+# Get the raw events array
+$events = $response.data.events
 
-Write-Host "Retrieved $($alerts.Count) alerts."
+# Filter only Medium severity (if the schema doesn’t support filter inside the query)
+$mediumEvents = $events | Where-Object { $_.severity -eq "Medium" }
 
-# -------------------------
-# === 5) Save to CSV ===
-# -------------------------
+Write-Host "📊 Retrieved $($mediumEvents.Count) Medium severity events."
 
-# Convert the list of edges to a flat list:
-$flatAlerts = $response.data.alertsV2.edges | ForEach-Object { $_.node }
-
-# Pick a path for your CSV:
+# ---------------------------
+# 6) Save to CSV
+# ---------------------------
 $timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-$outputPath = "$env:USERPROFILE\Desktop\Taegis_MediumAlerts_$timestamp.csv"
+$outputPath = "$env:USERPROFILE\Desktop\Taegis_MediumEvents_$timestamp.csv"
 
-$flatAlerts | Export-Csv -Path $outputPath -NoTypeInformation
+$mediumEvents | Export-Csv -Path $outputPath -NoTypeInformation
 
-Write-Host "Saved to: $outputPath"
+Write-Host "✅ CSV saved to: $outputPath"
+
 
